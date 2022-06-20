@@ -1,0 +1,606 @@
+---
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Analysis of AFI 100 Movies
+
+The goal of this analysis is to visualize data regarding [AFI's top 100 movies
+of all time](https://www.afi.com/afis-100-years-100-movies-10th-anniversary-edition/).
+Through these visualizations, the hope is that we can extract some insights
+about the film industry in general, and maybe get to know what makes a "great"
+movie.
+
+This document has 2 parts:
+* Data wrangling: scrape information from AFI's website, and combine it with
+datasets from IMDb to create a dataset fit for analysis
+* Data visualization: where we create several charts, focusing on movie
+characteristics (runtime, genres), crew (actors, directors and writers) and
+recognition (IMDb rating, Academy Awards).
+
+## Load libraries
+
+Let's first load the necessary libraries.
+
+```{r cars}
+options(warn = -1)
+library(rvest)
+library(tidyverse)
+library(data.table)
+library(ggplot2)
+options(warn = 0)
+```
+
+## Data Wrangling
+
+This is the part where we create the dataset for the analysis. 
+
+### Extract Top 100 Movies
+
+The first step is to extract the top 100 movies. For this, we leverage the
+rvest library. First, we pull the HTML of the page of interest.
+
+```{r}
+# use rvest library to pull the HTML
+web.page <- read_html("https://www.afi.com/afis-100-years-100-movies-10th-anniversary-edition/")
+```
+
+Looking at HTML, we notice that q_title is where the titles show up. We store
+the data associated with this element. Since there are two tabs, this data
+appears twice, so we only keep the first 100 elements.
+
+```{r}
+# extract the elements of the class q_title
+top.100.movies <- web.page %>%
+                  html_nodes(".q_title") %>%
+                  html_text()
+
+# only keep the first 100 movies to avoid duplicates
+top.100.movies <- top.100.movies[1:100]
+
+#' Process a movie title as extracted from the HTML
+#' 
+#' @param title: string extracted from the HTML
+#' @return list(processed.title, release.year): a list with the title and the
+#' release year
+process.movie.title <- function(title) {
+  # split on spaces
+  split.title <- strsplit(title, " ")
+  
+  # get release year
+  release.year <- split.title[[1]][length(split.title[[1]])]
+  release.year <- gsub("[()]", "", release.year)
+  
+  # remove first and last elements
+  split.title <- split.title[[1]][3:length(split.title[[1]]) - 1]
+  
+  # concatenate, with a space in between
+  processed.title <- paste0(split.title, collapse = " ")
+  
+  return(list(processed.title, release.year))
+
+}
+
+# split on spaces, and remove the first and last elements of the list 
+# these correspond to the rank and release date of the film respectively
+movie.info <- lapply(top.100.movies, process.movie.title)
+top.100.movies.titles <- lapply(movie.info, function(x) {x[[1]]})
+top.100.movies.release.years <- lapply(movie.info, function(x) {x[[2]]})
+```
+
+### Join with IMDb data
+
+Various APIs for IMDb exist, but they are often of questionable legality. For
+this reason, we decided to work with official IMDB datasets, available [here](https://datasets.imdbws.com/). Should you want to run this code, you will
+need to download these files to your local machine.
+
+```{r}
+setwd("~/Documents/Articles")
+basics <- fread("title.basics.tsv.gz")
+```
+
+We currently have movie titles and release years. IMDb has persistent IDs for 
+movies, but to get them we will need to match by title initially. 
+Hence, the first step is to check how many titles can be matched.
+
+```{r}
+# get titles that are matched
+matched.titles <- unique(basics[basics$originalTitle %in% top.100.movies.titles,"originalTitle"])
+
+# unmatched titles
+missing.titles <- top.100.movies.titles[!(top.100.movies.titles %in% matched.titles$originalTitle)]
+missing.titles
+```
+
+We notice that 3 movies are missing:
+* E.T.: The Extra-Terrestrial
+* One Flew Over the Cuckoo's Nest
+* Sunrise: A Song of Two Humans
+
+We can ensure these are matched, by fixing various spacing errors that
+appear in these titles.
+
+```{r}
+# extract indices 
+index.e.t <- which(top.100.movies.titles == "E.T.:  The Extra-Terrestrial")
+index.sunrise <- which(top.100.movies.titles == "Sunrise:  A Song of Two Humans")
+index.cuckoo <- which(top.100.movies.titles == "One Flew Over the Cuckoo's Nest ")
+
+# fix
+top.100.movies.titles[index.e.t] <- "E.T.: The Extra-Terrestrial"
+top.100.movies.titles[index.sunrise] <- "Sunrise: A Song of Two Humans"
+top.100.movies.titles[index.cuckoo] <- "One Flew Over the Cuckoo's Nest"
+
+# confirm all titles are matched
+matched.titles <- unique(basics[basics$originalTitle %in% top.100.movies.titles,"originalTitle"])
+length(matched.titles$originalTitle)
+```
+
+Now, let's create the dataset we will use for our data visualization exercise.
+The basics dataset has multiple rows per title. For our purposes, we only conserve
+a row if both the movie title and the release year match
+
+```{r}
+# filter the dataset by only keeping titles which match
+base <- merge(basics, matched.titles, by.x = "originalTitle", by.y = "originalTitle")
+```
+
+
+```{r}
+#' function to check if a row should be conserved: title matches with release year
+#' 
+#' @param row: a row in the dataframe
+#' @param movie.titles: dataframe of movie titles extracted from HTML
+#' @param release.years: dataframe of release years extracted from HTML
+#' @return boolean, whether row should be kept
+check.row <- function(row, movie.titles, release.years) {
+    # column 1 is the originalTitle, column 6 is the releaseYear in the row
+    # get the index for the release year
+    index <- which(row[1] == movie.titles)
+    
+    # check if the release year matches
+    return(unname(row[6]) == release.years[index])
+}
+```
+
+```{r}
+# apply to all the rows to see which ones to save
+row.mask <- as.logical(apply(base, 1, check.row, top.100.movies.titles, top.100.movies.release.years))
+
+# filter
+base.filtered <- base[row.mask,]
+```
+
+Some issues, which come from the IMDb dataset. E.T. is marked as a video game,
+and there is no corresponding movie in the original set. We remove this datapoint.
+We could fix manually, but decided to keep things simple, and losing one datapoint
+should not change things dramatically.
+
+In some cases, tvEpisodes or video games were released the same year. We can remove
+these instances. This final dataset contains one row per movie.
+
+```{r}
+base.filtered.final <- base.filtered[base.filtered$titleType == "movie",]
+
+# print the list of tconst of interest
+print(list(unique(base.filtered.final$tconst)))
+```
+
+### Get crew  and ratings information
+
+Now that we have this dataset, we can add crew (directors and writers), 
+ratings and principals (actors) information. We use a dataset that was 
+created by a separate Python script, 
+as Python was a lot faster at all these data manipulations. Please ensure
+the Python script was run so that the dataset is created.
+
+```{r}
+setwd("~/Documents/Articles")
+crew <- read.csv("crew_info.csv")
+crew <- crew[,2:ncol(crew)]
+
+# remove special characters
+crew <- transform(crew, 
+                  directors = str_remove_all(crew$directors, "\\[|\\]|\\'"),
+                  actors = str_remove_all(crew$actors, "\\[|\\]|\\'"),
+                  writers = str_remove_all(crew$writers, "\\[|\\]|\\'")
+                  )
+
+# make the strings into character vectors
+crew <- transform(crew, 
+                  directors = sapply(crew$directors, str_split, ", "),
+                  actors = sapply(crew$actors, str_split, ", "),
+                  writers = sapply(crew$writers, str_split, ", ")
+                  )
+```
+
+We can also pull in ratings information, directly from the IMDb dataset.
+
+```{r}
+ratings <- fread("title.ratings.tsv.gz")
+```
+
+Let's combine these separate datasets together.
+
+```{r}
+data.w.ratings <- merge(base.filtered.final, 
+                        ratings, 
+                        by.x = "tconst", 
+                        by.y = "tconst", 
+                        all.x = T)
+
+data.w.crew.ratings <- merge(data.w.ratings, 
+                             crew, 
+                             by.x = "tconst", 
+                             by.y = "tconst")
+```
+
+### Get Awards data
+
+Finally, we pull in some awards information, and format the data for later analysis.
+This data was found [online](https://datahub.io/rufuspollock/oscars-nominees-and-winners),
+and would need to be downloaded for this code to run.
+
+```{r}
+# pull in the full dataset
+setwd("~/Documents/Articles")
+awards <- read.csv("the_oscar_award.csv")
+
+# only keep winners
+award.winners <- awards[awards$winner == "True",]
+
+# count the number of awards at the movie level
+award.by.movie <- award.winners %>%
+                    group_by(film) %>%
+                    summarize(n_awards = n())
+
+# merge with the movie dataset, to form the final dataset
+movie.dataset <- merge(data.w.crew.ratings, award.by.movie, 
+                       by.x = "primaryTitle", by.y = "film", all.x = T)
+
+# only keep desired columns and replace NA with 0 in n_awards
+movie.dataset <- movie.dataset[,c("primaryTitle",
+                                  "startYear",
+                                  "runtimeMinutes",
+                                  "genres",
+                                  "averageRating",
+                                  "directors",
+                                  "writers",
+                                  "actors",
+                                  "n_awards")]
+
+# replace NA with 0, and encode runtime as a numeric variable
+movie.dataset$n_awards[is.na(movie.dataset$n_awards)] <- 0
+movie.dataset$runtimeMinutes <- as.numeric(movie.dataset$runtimeMinutes)
+
+# encode the releaseYear as a factor
+movie.dataset <- movie.dataset %>%
+                  mutate(releaseYear = factor(startYear))
+```
+
+## Data Visualization
+
+We now have the dataset with all the desired information for our analysis. We
+can work on visualizing elements of the dataset.
+
+### Comparative Dataset
+
+It will be useful to have a comparative dataset, a broader set of movies 
+from the IMDb dataset.
+
+```{r}
+# get comparison movies
+comparison.set <- basics[basics$primaryTitle == basics$originalTitle & basics$titleType == "movie",]
+comparison.set$releaseYear <- factor(comparison.set$startYear)
+
+# add ratings info
+comparison.set <- merge(comparison.set, ratings)
+```
+
+### Number of movies per year
+
+First, let's visualize the number of movies by release date.
+
+```{r}
+# all years dataset, to merge and ensure we consider all the years
+all.years <- data.frame(year = factor(c(1925:2001)))
+
+movie.dataset %>%
+  group_by(releaseYear) %>%
+  summarize(n_movies = n()) %>%
+  merge(all.years, by.x = "releaseYear", by.y = "year", all.y = T) %>%
+  replace(is.na(.), 0) %>%
+  ggplot(aes(x = releaseYear, y = n_movies)) +
+  geom_point() +
+  geom_line(aes(group=1)) +
+  theme(axis.text.x = element_text(angle = 90)) +
+  scale_x_discrete(limits= factor(c(1925:2001)), breaks = c(seq(1925, 2005,5))) +
+  expand_limits(y = 0) +
+  xlab("Release year") +
+  ylab("Number of movies on the top 100 list") +
+  ggtitle("Number of movies on the top 100 list each year between 1925 and 2001") +
+  theme_light()
+```
+We can aggregate this data at the decade level, to figure out the most 
+prolific decade.
+
+```{r}
+movie.dataset %>%
+  mutate(decade = factor(trunc(as.numeric(movie.dataset$startYear)/10)*10)) %>%
+  group_by(decade) %>%
+  summarize(n_movies = n()) %>%
+  ggplot(aes(x = decade, y = n_movies)) +
+  geom_bar(stat = "identity") +
+  ggtitle("Number of movies on the top 100 list by decade") +
+  theme_light()
+```
+
+### Movie characteristics
+
+Now that we have a sense of the temporality inherent to the list, we can look at
+a few movie characteristics. First, the runtime and its evolution over the years.
+
+```{r}
+movie.dataset %>%
+  ggplot(aes(x = "", y = runtimeMinutes)) +
+  geom_violin() +
+  geom_boxplot(width=0.1) + 
+  theme_light() + 
+  ylab("Distribution of movie runtime (in minutes)") +
+  expand_limits(y = 0)
+```
+
+
+```{r}
+movie.dataset %>%
+  ggplot(aes(x = as.numeric(startYear), y = as.numeric(runtimeMinutes))) +
+  geom_point(alpha = 0.1)  +
+  scale_x_discrete(limits= c(1925:2001), breaks = c(seq(1925, 2005,5))) +
+  stat_smooth() +
+  theme_light() +
+  xlab("Release Year") +
+  ylab("Runtime (in minutes)") +
+  ggtitle("Evolution of movie runtime among top 100 movies")
+```
+We can see the genres that are prevalent for each decade
+
+```{r}
+#' for each row in our dataset, create as many rows as there are genres
+#'
+#' @param row: row in a dataframe
+#' @return row.genres: a dataframe with the releaseYear and all the genres
+get.movie.genres <- function(row) {
+  # split the genres
+  genres = str_split(row[names(row) == "genres"], ",")
+  
+  # how many genres
+  n.genres <- length(genres)
+  
+  # combine into a dataset
+  row.genres <- data.frame(releaseYear = rep(row[names(row) == "releaseYear"], 
+                                             n.genres),
+                           genres = genres[[1]],
+                           row.names = NULL)
+  
+  return(row.genres)
+}
+
+# apply this function to all the rows and combine in a single dataframe
+year.genres <- dplyr::bind_rows(apply(movie.dataset, 1, get.movie.genres))
+```
+
+First, over all 100 movies, let's see which genres are most prevalent.
+
+```{r}
+year.genres %>%
+  ggplot(aes(x = fct_infreq(genres))) +
+  geom_bar() +
+  theme_light() +
+  xlab("Genre") +
+  ylab("Count of movies") +
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+Let's visualize this over time. Filter for top 5 genres above, to
+make the graph easier to see.
+
+```{r}
+# extract the top 5 genres
+top.5.genres <- year.genres %>%
+                  group_by(genres) %>%
+                  summarize(count = n()) %>%
+                  slice_max(count, n=5) %>%
+                  select(genres)
+
+# plot the proportion of these genres over time
+year.genres %>%
+  filter(genres %in% top.5.genres$genres) %>%
+  mutate(decade = factor(trunc(as.numeric(releaseYear)/10)*10)) %>%
+  group_by(decade, genres) %>%
+  summarize(count = n()) %>%
+  ggplot(aes(x = decade, y = count, fill = genres)) +
+  geom_bar(position="fill", stat="identity") +
+  theme(legend.position="top",
+        axis.text.x = element_text(angle = 90)) +
+  xlab("Decade") +
+  ylab("Share of total") +
+  ggtitle("Prevalence of top 5 genres over time among top 100 movies")
+```
+
+Similarly for the overall dataset
+
+```{r}
+year.genres.overall <- dplyr::bind_rows(apply(comparison.set, 1, get.movie.genres))
+```
+
+We can examine the overall prevalence, and how it has changed over time.
+
+```{r}
+year.genres.overall %>%
+  ggplot(aes(x = fct_infreq(genres))) +
+  geom_bar() +
+  theme_light() +
+  xlab("Genre") +
+  ylab("Count of movies") +
+  ggtitle("Prevalence of genres across all movies") +
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+```{r}
+year.genres.overall %>%
+  filter(genres %in% top.5.genres$genres) %>%
+  mutate(decade = factor(trunc(as.numeric(releaseYear)/10)*10)) %>%
+  filter(!is.na(decade)) %>%
+  group_by(decade, genres) %>%
+  summarize(count = n()) %>%
+  ggplot(aes(x = decade, y = count, fill = genres)) +
+  geom_bar(position="fill", stat="identity") +
+  theme(legend.position="top",
+        axis.text.x = element_text(angle = 90)) +
+  xlab("Decade") +
+  ylab("Proportion of total") +
+  ggtitle("Prevalence of top 5 genres over time in the overall dataset")
+```
+
+
+### People analysis
+
+Movies are made by people. Let's look at who's involved: directors, writers
+and actors.
+
+```{r}
+#' create a dataframe in a long format, helper function for extract.crew.info
+#' @param row: vector representing the row of a dataframe to be processed
+#' @param people: string, which column we want to pull
+#' @param nRep: how many times to repeat the first two fields to create the df
+#' @return people.df: df in the long format format of people involved in the movie
+create.long.df <- function(row, people, nRep) {
+  people.df <- data.frame(
+                releaseYear = rep(row[names(row) == "releaseYear"], nRep),
+                primaryTitle = rep(row[names(row) == "primaryTitle"], nRep),
+                type = rep(people, nRep),
+                people = row[names(row) == people]
+  )
+  
+  return(people.df)
+}
+```
+
+
+```{r}
+#' Extract crew information for a given movie
+#' @param row: a row the dataframe with the desired crew information
+#' @return crew.df: a dataframe with crew information in a long format
+extract.crew.info <- function(row) {
+  # get number of writers, directors and actors
+  n.writers = length(row[names(row) == "writers"])
+  n.actors = length(row[names(row) == "actors"])
+  n.directors = length(row[names(row) == "directors"])
+  
+  # create dataframes in long format for each category of people
+  writers.df = create.long.df(row, "writers", n.writers)
+  actors.df = create.long.df(row, "actors", n.actors)
+  directors.df = create.long.df(row, "directors", n.directors)
+  
+  # combine in one single dataframe for that row
+  crew.df <- dplyr::bind_rows(list(writers.df, actors.df, directors.df))
+  
+  return(crew.df)
+}
+
+movie.crew.info <- dplyr::bind_rows(apply(movie.dataset, 1, extract.crew.info))
+
+# create a name column, which coalesces values
+movie.crew.info$name <- dplyr::coalesce(movie.crew.info$actors,
+                                        movie.crew.info$directors,
+                                        movie.crew.info$writers)
+```
+
+Let us visualize the most prevalent people in each category.
+
+```{r}
+movie.crew.info %>%
+  group_by(type, name) %>%
+  summarize(count = n()) %>%
+  top_n(n = 10) %>%
+  ggplot(aes(x = reorder(name, -count), y = count)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~type, scales = "free_x") + 
+  theme_light() +
+  xlab("Person") +
+  ylab("Count of movies") +
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+Let us examine the rise and fall of these big actors over time.
+
+```{r}
+# get the top 20 most represented actors
+famous.actors <-
+  movie.crew.info %>%
+    filter(type == "actors") %>%
+    group_by(name) %>%
+    summarize(count = n()) %>%
+    top_n(n = 15)
+
+# get all the movies from these actors
+movie.crew.info %>%
+  filter(type == "actors" & name %in% famous.actors$name) %>%
+  ggplot(aes(x = releaseYear, y = name)) +
+  geom_point() +
+  theme_light() +
+  theme(axis.text.x = element_text(angle = 90)) +
+  xlab("Movie release year") +
+  ylab("Actor") +
+  ggtitle("Actor presence over the years")
+```
+
+### Recognition
+
+These movies were judged to be most culturally significant by the American Film
+Institute. Do the ratings and awards receive reflect this? We can first compare
+IMDb ratings for these top 100 movies, and for the comparison dataset.
+
+```{r}
+# create combined dataset, to compare overall ratings distribution to top 100 distribution
+movie.dataset$movie_category <- "top_100"
+comparison.set$movie_category <- "overall"
+compare.ratings.df <- dplyr::bind_rows(movie.dataset[,c("releaseYear", 
+                                                        "movie_category",
+                                                        "averageRating")],
+                                    comparison.set[,c("releaseYear", 
+                                                      "movie_category",
+                                                      "averageRating")])
+
+compare.ratings.df %>%
+  ggplot(aes(x = averageRating, y = ..scaled.., fill = movie_category)) + 
+  geom_density(alpha = 0.5) +
+  xlab("Avergae IMDB rating") + 
+  ylab("Scaled density") + 
+  ggtitle("Comparison of ratings for all movies and top 100 movies")
+```
+
+Visually, these distributions are different. We can confirm this visual 
+intuition with a numerical test, using Kolmogorov-Smirnov.
+
+```{r}
+ks.test(averageRating ~ movie_category, data = compare.ratings.df)
+```
+
+Finally, we can examine how many Academy Awards these movies have received.
+
+```{r}
+movie.dataset %>%
+  ggplot(aes(x = n_awards)) +
+  geom_bar() +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 12)) +
+  ylab("Number of movies") + 
+  xlab("Number of awards") +
+  geom_text(data=subset(movie.dataset, n_awards>9), aes(y = 10, label=primaryTitle), 
+                  position= position_dodge(width=0.9), angle = 90) +
+  ggtitle("Distribution of awards received among top 100 movies") +
+  theme_light()
+```
+
