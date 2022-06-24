@@ -19,7 +19,7 @@ get you there.
 ### Download the data
 
 While I did some web scraping to get the list of movies (included in the R code), I relied extensively on IMDb to get additional information. You should
-download all the files available [here](https://datasets.imdbws.com/) and store them in your working directory. In addition, I used [this dataset](https://datahub.io/rufuspollock/oscars-nominees-and-winners) to track Academy Awards winners over time (thanks to Datahub for this). 
+download all the files available [here](https://datasets.imdbws.com/) and store them in your working directory. In addition, I used [this dataset](https://datahub.io/rufuspollock/oscars-nominees-and-winners) to track Academy Awards winners over time (thanks to rufuspollock for making this data easily available on Datahub). 
 
 ### Run the Python script
 
