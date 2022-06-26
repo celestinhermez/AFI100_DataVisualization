@@ -180,7 +180,9 @@ base.filtered <- base[row.mask,]
 
 There are some issues, which come from the IMDb dataset. For instance,
 E.T. is marked as a video game, and there is no corresponding movie in the original set. 
-We remove this datapoint. We could fix manually, 
+Similarly, Intolerance does not have a movie with the right release year in the
+IMDb dataset.
+We remove these datapoints. We could fix manually, 
 but decided to keep things simple, and losing one datapoint
 should not change things dramatically.
 
@@ -348,6 +350,8 @@ movie.dataset %>%
   summarize(n_movies = n()) %>%
   ggplot(aes(x = decade, y = n_movies)) +
   geom_bar(stat = "identity") +
+  xlab("Decade") +
+  ylab("Number of movies") +
   ggtitle("Number of movies on the top 100 list by decade") +
   theme_light()
 ```
@@ -553,7 +557,7 @@ movie.crew.info %>%
   theme_light() +
   xlab("Person") +
   ylab("Count of movies") +
-  ggtitle("Most common people involved in top 100 movies") +
+  ggtitle("People most involved in top 100 movies") +
   theme(axis.text.x = element_text(angle = 90))
 ```
 
@@ -601,7 +605,7 @@ compare.ratings.df %>%
   ggplot(aes(x = averageRating, y = ..scaled.., fill = movie_category)) + 
   geom_density(alpha = 0.5) +
   theme_light() +
-  xlab("Avergae IMDB rating") + 
+  xlab("Average IMDb rating") + 
   ylab("Scaled density") + 
   ggtitle("Comparison of ratings for all movies and top 100 movies")
 ```
@@ -654,7 +658,7 @@ movie.dataset %>%
   geom_text(data=subset(movie.dataset, n_nominations>15), aes(y = 5, label=primaryTitle), 
                   position= position_dodge(width=0.9), angle = 90) +
   ylab("Number of movies") + 
-  xlab("Number of awards") +
+  xlab("Number of nominations") +
   ggtitle("Distribution of Academy Award nominations among top 100 movies") +
   theme_light()
 ```
