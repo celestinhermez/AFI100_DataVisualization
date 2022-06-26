@@ -9,7 +9,7 @@ where I left off, and unearth more insights from the wealth of data present. Any
 
 ## Prerequisites
 
-The core of the analysis is included in the R markdown file included in the repo. While I have included a PDF version for your viewing please, should you want to run and modify the code yourself, you will need to take the following steps.
+The core of the analysis is included in the R markdown file. While I have included a PDF version, should you want to run and modify the code yourself, you will need to take the following steps.
 
 ### Install the libraries
 
